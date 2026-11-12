@@ -152,8 +152,11 @@ class QuitDialog(Exception):
 
 
 def ask(output, question, options, *, pending_edit=False, parse=None):
-    quit_label = "Quit without applying changes" if pending_edit else "Quit"
-    options = [*options, ("q", quit_label)]
+    keys = [key for label, _ in options for key in label.split(" / ")]
+    if "q" not in keys:
+        quit_label = "Quit without applying changes" if pending_edit else "Quit"
+        options = [*options, ("q", quit_label)]
+        keys.append("q")
     width = max(len(key) for key, _ in options)
     output.message(question)
     print()
@@ -161,7 +164,6 @@ def ask(output, question, options, *, pending_edit=False, parse=None):
         print(f"  {key:<{width}}    {label}")
     print()
 
-    keys = [key for key, _ in options]
     while True:
         try:
             answer = input("Selection: " if parse else "Choice: ").strip().casefold()
@@ -186,7 +188,7 @@ def ask(output, question, options, *, pending_edit=False, parse=None):
             output.message(f"Enter {', '.join(keys[:-1])}, or {keys[-1]}.")
 
 
-def show_pages(output, rows, *, kind, stop_label, pending_edit=False):
+def show_pages(output, rows, *, kind, stop_option, pending_edit=False):
     shown = 0
     while shown < len(rows):
         page = rows[shown:shown + PAGE_SIZE]
@@ -205,7 +207,7 @@ def show_pages(output, rows, *, kind, stop_label, pending_edit=False):
             question = f"Show the next {kind}?"
         else:
             question = f"Show the next {remaining} {kind}s?"
-        if ask(output, question, [("y", "Show the next page"), ("n", stop_label)],
+        if ask(output, question, [("y", "Show the next page"), stop_option],
                pending_edit=pending_edit) == "n":
             break
     return shown
@@ -213,7 +215,7 @@ def show_pages(output, rows, *, kind, stop_label, pending_edit=False):
 
 def show_errors(output, errors):
     try:
-        show_pages(output, errors, kind="error", stop_label="Finish viewing errors")
+        show_pages(output, errors, kind="error", stop_option=("n", "Finish viewing errors"))
     except QuitDialog:
         pass
 
@@ -268,7 +270,7 @@ def confirm_selection(output, rows, selected, shown):
             return answer == "y"
         displayed = show_pages(
             output, [rows[index] for index in unseen], kind="unseen selected item",
-            stop_label="Return to confirmation", pending_edit=True,
+            stop_option=("n", "Return to confirmation"), pending_edit=True,
         )
         shown.update(unseen[:displayed])
 
@@ -276,7 +278,7 @@ def confirm_selection(output, rows, selected, shown):
 def select_items(output, rows):
     count = len(rows)
     shown = set(range(show_pages(
-        output, rows, kind="proposed change", stop_label="Continue to item selection", pending_edit=True,
+        output, rows, kind="proposed change", stop_option=("n", "Continue to item selection"), pending_edit=True,
     )))
     while True:
         selected = ask(
@@ -433,10 +435,10 @@ def main(*, now=datetime.now):
             else:
                 question = f"Show the first {PAGE_SIZE}?"
             if ask(output, f"{summary} {question}", [
-                ("y", "Show results"), ("n", "Finish with the count only"),
+                ("y", "Show results"), ("n / q", "Exit search"),
             ]) == "y":
                 show_pages(output, [describe(item) for item in items],
-                           kind="result", stop_label="Finish viewing results")
+                           kind="result", stop_option=("n / q", "Exit search"))
             return 0
         return apply_edits(output, args, items)
     except FileNotFoundError:

@@ -16,7 +16,7 @@ On macOS, you can enable CLI authentication in the 1Password desktop app under *
 python3 1password-items.py search --category Login --title 'google|gmail'
 ```
 
-Search shows the number of matches first. Enter `y` to display the first page, `n` to finish with the count only, or `q` to quit. With no filters, the count covers all active items available to the current CLI account.
+Search shows the number of matches first. Enter `y` to display the first page. At any search prompt, enter `n` or `q` to exit search. With no filters, the count covers all active items available to the current CLI account.
 
 All three commands accept the same filters. Combine them to narrow the results.
 

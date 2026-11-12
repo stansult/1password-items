@@ -96,6 +96,19 @@ class ItemCommandTests(unittest.TestCase):
                 self.assertEqual("'Google' [Personal]" in result.stdout, show)
                 self.assertEqual(edits, [])
 
+    def test_search_exit_keys_share_a_row_on_both_pages(self):
+        for prefix in ("", "y\n"):
+            for key in ("n", "q"):
+                with self.subTest(prefix=prefix, key=key):
+                    result, edits = self.run_items(
+                        "search", answer=f"{prefix}{key}\ny\n", TEST_PAGE_COUNT="23"
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.count("  n / q    Exit search"), 2 if prefix else 1)
+                    self.assertEqual(result.stdout.count("'Sample "), 10 if prefix else 0)
+                    self.assertNotIn("\n  q    Quit", result.stdout)
+                    self.assertEqual(edits, [])
+
     def test_search_matches_titles_only(self):
         result, edits = self.run_items(
             "search", "--title", "google|gmail", *LOGIN_FILTERS, answer="yes\n"
@@ -325,7 +338,7 @@ class ItemCommandTests(unittest.TestCase):
         tag = ("tag", "Sample Tag", "--title", "^Sample")
         cases = [
             ("search first", ("search",), "", 23, "Show the first 10?", 0),
-            ("search more", ("search",), "y\n", 23, "Finish viewing results", 0),
+            ("search more", ("search",), "y\n", 23, "n / q    Exit search", 0),
             ("edit preview", tag, "", 23, "Continue to item selection", 0),
             ("item selection", tag, "", 1, "Select the only item", 0),
             ("confirm unseen", tag, "n\nall\n", 23, "Preview the 13 unseen items", 0),
@@ -375,7 +388,7 @@ class ItemCommandTests(unittest.TestCase):
         self.assertTrue(result.stdout.startswith(
             "[2026-11-12]\n[09:05:04] 7 matching items. Show all 7 matching items?\n\n"
         ))
-        self.assertIn("\n  y    Show results\n", result.stdout)
+        self.assertIn("\n  y        Show results\n  n / q    Exit search\n", result.stdout)
         self.assertIn("\nChoice: \n[09:05:06] Enter y, n, or q.\nChoice: \n", result.stdout)
         self.assertIn("\n'Google' [Personal] (LOGIN)\n", result.stdout)
         self.assertEqual(result.stdout.count("[2026-11-12]"), 1)
