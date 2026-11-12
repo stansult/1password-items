@@ -193,7 +193,7 @@ def parse_arguments():
     filters.add_argument("--vault", help="vault name or ID")
 
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("search", parents=[filters], help="list matching items")
+    commands.add_parser("search", parents=[filters], help="count and optionally list matching items")
     change = commands.add_parser("change", parents=[filters], help="preview and edit a field")
     change.add_argument("--field", default="title", help="title or an existing plain-text field")
     change.add_argument("--section", help="section name or ID for a named field")
@@ -237,9 +237,15 @@ def main():
             print("No matching items.")
             return 0
         if args.command == "search":
-            for item in items:
-                print(describe(item))
-            print(f"{len(items)} matching items.")
+            count = len(items)
+            print(f"{count} matching {'item' if count == 1 else 'items'}.")
+            try:
+                answer = input("Show all matching items? [y/N] ").strip().casefold()
+            except EOFError:
+                return 0
+            if answer in {"y", "yes"}:
+                for item in items:
+                    print(describe(item))
             return 0
         return apply_edits(args, items)
     except FileNotFoundError:

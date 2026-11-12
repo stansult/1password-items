@@ -16,6 +16,8 @@ On macOS, you can enable CLI authentication in the 1Password desktop app under *
 python3 1password-items.py search --category Login --title 'google|gmail'
 ```
 
+Search shows the number of matches first. Enter `y` or `yes` to display the list, or press Return to leave it hidden. With no filters, the count covers all active items available to the current CLI account.
+
 All three commands accept the same filters. Combine them to narrow the results.
 
 | Filter | Matches |
@@ -59,3 +61,11 @@ If the CLI reports an unsupported field such as `ssoLogin`, edit that item in th
 Search, selection, title and named-field changes, tag preservation, and continuation after a rejected edit were checked with simulated CLI responses. The unified script's edit commands have yet to be verified against a live test vault.
 
 Run `python3 1password-items.py --help` or append `--help` to any subcommand for more details.
+
+## Run the tests
+
+```sh
+python3 -B -m unittest discover -s tests -v
+```
+
+The suite runs the script against a shared fake `op` command and needs no 1Password account or credentials. GitHub Actions runs it on pushes and pull requests with Python 3.9 and 3.15. [Live test vault verification](https://github.com/stansult/1password-items/issues/3) is manual.

@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+
+
+def item(id, title, tags=(), fields=()):
+    return dict(id=id, title=title, tags=list(tags), category="LOGIN",
+                vault=dict(id="vault-id", name="Personal"), fields=list(fields))
+
+
+items = [
+    item("work1", "Myworkdayjobs - Acme", ["Workday"]),
+    item("work2", "Myworkdayjobs - Reject", ["Workday"]),
+    item("work3", "Myworkdayjobs - Zenith", ["Workday"]),
+    item("work4", "Workday | Done", ["Workday"]),
+    item("google", "Google", ["Personal"], [
+        dict(id="username", label="username", type="STRING", value="old@example.com"),
+        dict(id="password", label="password", type="CONCEALED", value="[use 'op item get --reveal' to reveal]"),
+        dict(id="abc123", label="Contact", type="EMAIL", value="old@example.com",
+             section=dict(id="sect123", label="Details")),
+    ]),
+    item("gmail", "Gmail", ["Google Accounts"]),
+    item("other", "Third party", fields=[
+        dict(id="username", label="username", type="STRING", value="example@gmail.com"),
+    ]),
+]
+
+if args[:2] == ["item", "list"]:
+    assert args[2:] in (
+        ["--format", "json"],
+        ["--categories", "Login", "--vault", "Personal", "--format", "json"],
+    )
+    print(json.dumps([{k: v for k, v in row.items() if k != "fields"} for row in items]))
+elif args[:2] == ["item", "get"]:
+    assert args[3:] == ["--vault", "vault-id", "--format", "json"]
+    row = next(row for row in items if row["id"] == args[2])
+    if row["id"] == "google" and os.getenv("TEST_REFRESH_TAG"):
+        row["tags"].append("Added after preview")
+    print(json.dumps(row))
+elif args[:2] == ["item", "edit"]:
+    assert args[3:5] == ["--vault", "vault-id"]
+    with open(os.environ["TEST_OP_LOG"], "a") as out:
+        print(json.dumps(args[2:]), file=out)
+    if args[2] == "work2":
+        print("unsupported field type: ssoLogin", file=sys.stderr)
+        sys.exit(8)
+else:
+    raise AssertionError(args)
