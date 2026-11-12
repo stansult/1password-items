@@ -36,7 +36,7 @@ python3 1password-items.py change --category Login --has-tag Workday \
 
 The default field is `title`. Use `--field` for an existing plain-text field and `--section` to distinguish fields with the same name. Use `--set VALUE` to set the full value or `--replace OLD NEW` for a literal, case-sensitive replacement. Add `--prefix` to limit the replacement to the beginning of the value.
 
-Field values appear in the preview and are passed as command-line arguments to `op`. Use this command for non-sensitive values.
+The preview displays both the current and proposed values. The script passes the proposed value as an argument to `op`, so it may be visible to other local processes. Use this command for non-sensitive values.
 
 ## Add a tag
 
@@ -50,6 +50,12 @@ The tag can be new or already in use. The script keeps existing tags and skips i
 
 Both edit commands require a search filter. At the numbered preview, enter item numbers separated by commas, enter `all`, or press Return on an empty line to cancel.
 
-The script continues when 1Password rejects an item and reports skipped edits. If the CLI reports an unsupported field such as `ssoLogin`, edit that item in the 1Password app. Items with existing tags containing commas also need to be tagged in the app.
+Each selected item is saved separately. Successful changes stay applied if a later edit fails. The script continues after individual errors, reports the skipped items, and exits with status 1 when the batch reports errors. Review the summary before rerunning a command. A search can still match items that were updated, depending on its filters.
+
+If the CLI reports an unsupported field such as `ssoLogin`, edit that item in the 1Password app. Items with existing tags containing commas also need to be tagged in the app.
+
+## Verification
+
+Search, selection, title and named-field changes, tag preservation, and continuation after a rejected edit were checked with simulated CLI responses. The unified script's edit commands have yet to be verified against a live test vault.
 
 Run `python3 1password-items.py --help` or append `--help` to any subcommand for more details.
