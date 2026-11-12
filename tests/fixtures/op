@@ -28,6 +28,10 @@ items = [
     ]),
 ]
 
+page_count = int(os.environ.get("TEST_PAGE_COUNT", "0"))
+if page_count:
+    items = [item(f"page{number:02}", f"Sample {number:02}") for number in range(1, page_count + 1)]
+
 if args[:2] == ["item", "list"]:
     assert args[2:] in (
         ["--format", "json"],
@@ -44,7 +48,8 @@ elif args[:2] == ["item", "edit"]:
     assert args[3:5] == ["--vault", "vault-id"]
     with open(os.environ["TEST_OP_LOG"], "a") as out:
         print(json.dumps(args[2:]), file=out)
-    if args[2] == "work2":
+    reject_through = int(os.environ.get("TEST_REJECT_THROUGH", "0"))
+    if args[2] == "work2" or (args[2].startswith("page") and int(args[2][4:]) <= reject_through):
         print("unsupported field type: ssoLogin", file=sys.stderr)
         sys.exit(8)
 else:

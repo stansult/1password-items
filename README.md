@@ -16,7 +16,7 @@ On macOS, you can enable CLI authentication in the 1Password desktop app under *
 python3 1password-items.py search --category Login --title 'google|gmail'
 ```
 
-Search shows the number of matches first. Enter `y` or `yes` to display the list, or press Return to leave it hidden. With no filters, the count covers all active items available to the current CLI account.
+Search shows the number of matches first. Enter `y` to display the first page, `n` to finish with the count only, or `q` to quit. With no filters, the count covers all active items available to the current CLI account.
 
 All three commands accept the same filters. Combine them to narrow the results.
 
@@ -50,9 +50,20 @@ The tag can be new or already in use. The script keeps existing tags and skips i
 
 ## Review and apply changes
 
-Both edit commands require a search filter. At the numbered preview, enter item numbers separated by commas, enter `all`, or press Return on an empty line to cancel.
+Search results, edit previews, and error lists display at most 10 items per page. Enter `y` at a paging prompt to continue, or `n` to stop listing and continue to the step named in the prompt.
 
-Each selected item is saved separately. Successful changes stay applied if a later edit fails. The script continues after individual errors, reports the skipped items, and exits with status 1 when the batch reports errors. Review the summary before rerunning a command. A search can still match items that were updated, depending on its filters.
+Both edit commands require a search filter. Item numbers stay fixed across the whole batch. At the selection prompt, enter one of the following:
+
+- `all` selects the entire batch, including items you haven't previewed.
+- `shown` selects every item displayed so far.
+- Numbers and ranges such as `1,4,7-11, 20-22` select those items from the batch. Overlapping entries count once.
+- `q` quits without applying changes.
+
+Confirm the selection with `y` to apply it, or enter `n` to go back to item selection. If any selected items are still unseen, enter `p` to preview just those items with their original numbers, then confirm again. Items displayed using `p` also count toward `shown`.
+
+Every prompt lists its options vertically. Enter `q` at any prompt to quit immediately. If edits have already been applied, they stay saved. A blank response repeats the prompt without a warning. Invalid input shows a hint and repeats the same prompt.
+
+After confirmation, the script shows how many items it has processed. The counter updates in place in an interactive terminal. Each selected item is saved separately. Successful changes stay applied if a later edit fails. The final summary counts successful edits, skipped errors, and items already up to date. Only errors are listed, with their original preview numbers when available. The script continues after individual errors and exits with status 1 when the batch reports errors. Review the summary before rerunning a command. A search can still match items that were updated, depending on its filters.
 
 If the CLI reports an unsupported field such as `ssoLogin`, edit that item in the 1Password app. Items with existing tags containing commas also need to be tagged in the app.
 

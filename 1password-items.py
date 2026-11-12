@@ -9,16 +9,20 @@ import sys
 from dataclasses import dataclass
 
 
+PAGE_SIZE = 10
+
+
 @dataclass
 class Edit:
     arguments: list[str]
     preview: str
 
 
-def op_json(*arguments):
+def op_json(*arguments, capture_errors=False):
     result = subprocess.run(
         ["op", *arguments, "--format", "json"],
         stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE if capture_errors else None,
         text=True,
         check=True,
     )
@@ -46,7 +50,9 @@ def describe(item):
 
 
 def get_item(item):
-    return op_json("item", "get", item["id"], "--vault", item["vault"]["id"])
+    return op_json(
+        "item", "get", item["id"], "--vault", item["vault"]["id"], capture_errors=True
+    )
 
 
 def field_assignment(details, name, section):
@@ -113,48 +119,191 @@ def prepare_edit(args, item, details=None):
     return Edit(arguments, f"{old_value!r} → {new_value!r}")
 
 
-def select_items(count):
-    answer = input("Apply to which items? Enter numbers, all, or Return to cancel: ").strip()
-    if not answer:
-        return []
-    if answer.casefold() == "all":
-        return list(range(count))
+class QuitDialog(Exception):
+    """The user quit the command or closed its input."""
+
+
+def ask(question, options, *, pending_edit=False, parse=None):
+    quit_label = "Quit without applying changes" if pending_edit else "Quit"
+    options = [*options, ("q", quit_label)]
+    width = max(len(key) for key, _ in options)
+    print(f"{question}\n")
+    for key, label in options:
+        print(f"  {key:<{width}}    {label}")
+    print()
+
+    keys = [key for key, _ in options]
+    while True:
+        try:
+            answer = input("Selection: " if parse else "Choice: ").strip().casefold()
+        except EOFError:
+            raise QuitDialog from None
+        if answer == "q":
+            raise QuitDialog
+        if not answer:
+            continue
+        if parse:
+            try:
+                return parse(answer)
+            except ValueError as error:
+                print(error)
+        else:
+            answer = {"yes": "y", "no": "n"}.get(answer, answer)
+            if answer in keys:
+                return answer
+            print(f"Enter {', '.join(keys[:-1])}, or {keys[-1]}.")
+
+
+def show_pages(rows, *, kind, stop_label, pending_edit=False):
+    shown = 0
+    while shown < len(rows):
+        page = rows[shown:shown + PAGE_SIZE]
+        print()
+        for row in page:
+            print(row)
+        print()
+        shown += len(page)
+        if shown == len(rows):
+            break
+
+        remaining = len(rows) - shown
+        if remaining > PAGE_SIZE:
+            question = f"Show the next {PAGE_SIZE} of {remaining} remaining {kind}s?"
+        elif remaining == 1:
+            question = f"Show the next {kind}?"
+        else:
+            question = f"Show the next {remaining} {kind}s?"
+        if ask(question, [("y", "Show the next page"), ("n", stop_label)],
+               pending_edit=pending_edit) == "n":
+            break
+    return shown
+
+
+def show_errors(errors):
     try:
-        numbers = sorted({int(part) for part in answer.split(",")})
-    except ValueError:
-        raise SystemExit("Enter comma-separated item numbers.")
-    if numbers[0] < 1 or numbers[-1] > count:
-        raise SystemExit("An item number is outside the preview.")
-    return [number - 1 for number in numbers]
+        show_pages(errors, kind="error", stop_label="Finish viewing errors")
+    except QuitDialog:
+        pass
+
+
+def edit_error(error):
+    if isinstance(error, subprocess.CalledProcessError):
+        detail = " ".join((error.stderr or "").split())
+        message = f"1Password CLI exited with status {error.returncode}"
+        return f"{message}: {detail}" if detail else message
+    return str(error)
+
+
+def parse_selection(answer, count, shown):
+    if answer == "all":
+        return list(range(count))
+    if answer == "shown":
+        return sorted(shown)
+
+    selected = set()
+    for part in answer.split(","):
+        match = re.fullmatch(r"([0-9]+)(?:\s*-\s*([0-9]+))?", part.strip())
+        if not match:
+            raise ValueError("Enter all, shown, item numbers or ranges, or q.")
+        try:
+            first = int(match[1])
+            last = int(match[2]) if match[2] is not None else first
+        except ValueError:
+            raise ValueError(f"Use item numbers from 1 to {count}.") from None
+        if not 1 <= first <= last <= count:
+            raise ValueError(f"Use item numbers from 1 to {count} and ranges in ascending order.")
+        selected.update(range(first - 1, last))
+    return sorted(selected)
+
+
+def confirm_selection(rows, selected, shown):
+    while True:
+        unseen = [index for index in selected if index not in shown]
+        count = len(selected)
+        question = f"Apply changes to {count} {'item' if count == 1 else 'items'}?"
+        options = [("y", "Apply changes"), ("n", "Go back to item selection")]
+        if unseen:
+            remaining = len(unseen)
+            unseen_message = (
+                "1 item hasn't been previewed." if remaining == 1
+                else f"{remaining} items haven't been previewed."
+            )
+            question = f"{question} {unseen_message}"
+            options.append(("p", f"Preview the {remaining} unseen {'item' if remaining == 1 else 'items'}"))
+
+        answer = ask(question, options, pending_edit=True)
+        if answer != "p":
+            return answer == "y"
+        displayed = show_pages(
+            [rows[index] for index in unseen], kind="unseen selected item",
+            stop_label="Return to confirmation", pending_edit=True,
+        )
+        shown.update(unseen[:displayed])
+
+
+def select_items(rows):
+    count = len(rows)
+    shown = set(range(show_pages(
+        rows, kind="proposed change", stop_label="Continue to item selection", pending_edit=True,
+    )))
+    while True:
+        selected = ask(
+            f"You previewed {len(shown)} of {count} proposed changes.",
+            [
+                ("all", f"Select all {count} items" if count > 1 else "Select the only item"),
+                ("shown", f"Select the {len(shown)} previewed items" if len(shown) > 1
+                 else "Select the previewed item"),
+                ("3-5,8", "Example: select items 3, 4, 5, and 8"),
+            ],
+            pending_edit=True,
+            parse=lambda answer: parse_selection(answer, count, shown),
+        )
+        if confirm_selection(rows, selected, shown):
+            return selected
+
+
+def report_edit_progress(processed, total, *, inline):
+    prefix = "\r" if inline and processed else ""
+    end = "" if inline and processed < total else "\n"
+    print(f"{prefix}Applying changes… {processed}/{total} items processed.", end=end, flush=True)
 
 
 def apply_edits(args, items):
     planned = []
-    failures = 0
+    errors = []
     for item in items:
         try:
             edit = prepare_edit(args, item)
         except (ValueError, subprocess.CalledProcessError) as error:
-            print(f"Skipped {describe(item)} — {error}", file=sys.stderr)
-            failures += 1
+            errors.append(f"Skipped {describe(item)} — {edit_error(error)}")
             continue
         if edit is not None:
             planned.append((item, edit))
 
     if not planned:
         print("No changes to apply.")
-        return int(bool(failures))
+        if errors:
+            print(f"Skipped due to errors: {len(errors)}.")
+            show_errors(errors)
+        return int(bool(errors))
 
-    for number, (item, edit) in enumerate(planned, start=1):
-        print(f"{number}. {describe(item)} — {edit.preview}")
-
-    selected = select_items(len(planned))
-    if not selected:
+    print(f"{len(planned)} proposed changes.")
+    try:
+        selected = select_items([
+            f"{number}. {describe(item)} — {edit.preview}"
+            for number, (item, edit) in enumerate(planned, start=1)
+        ])
+    except QuitDialog:
         print("Canceled.")
         return 0
 
     applied = 0
-    for index in selected:
+    up_to_date = 0
+    total = len(selected)
+    inline = sys.stdout.isatty()
+    for processed, index in enumerate(selected):
+        if inline or processed == 0:
+            report_edit_progress(processed, total, inline=inline)
         item, edit = planned[index]
         try:
             current = get_item(item)
@@ -162,26 +311,31 @@ def apply_edits(args, items):
                 raise ValueError("item changed since the preview; run the command again")
             refreshed = prepare_edit(args, current, current)
             if refreshed is None:
-                print(f"Already up to date: {describe(item)}")
+                up_to_date += 1
                 continue
             if args.command == "change" and refreshed != edit:
                 raise ValueError("field changed since the preview; run the command again")
-            result = subprocess.run(
+            subprocess.run(
                 ["op", "item", "edit", item["id"], "--vault", item["vault"]["id"],
                  *refreshed.arguments],
                 stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
             )
-            if result.returncode:
-                raise ValueError(f"1Password rejected the edit (exit {result.returncode})")
         except (ValueError, subprocess.CalledProcessError) as error:
-            print(f"Skipped {describe(item)} — {error}", file=sys.stderr)
-            failures += 1
+            errors.append(f"{index + 1}. Skipped {describe(item)} — {edit_error(error)}")
             continue
         applied += 1
-        print(f"Updated {describe(item)}")
 
-    print(f"Applied {applied} changes. Skipped due to errors: {failures}.")
-    return int(bool(failures))
+    if inline:
+        report_edit_progress(total, total, inline=True)
+    changes = "change" if applied == 1 else "changes"
+    print(f"Applied {applied} {changes}. Skipped due to errors: {len(errors)}.")
+    if up_to_date:
+        print(f"Already up to date: {up_to_date}.")
+    show_errors(errors)
+    return int(bool(errors))
 
 
 def parse_arguments():
@@ -238,22 +392,26 @@ def main():
             return 0
         if args.command == "search":
             count = len(items)
-            print(f"{count} matching {'item' if count == 1 else 'items'}.")
-            try:
-                answer = input("Show all matching items? [y/N] ").strip().casefold()
-            except EOFError:
-                return 0
-            if answer in {"y", "yes"}:
-                for item in items:
-                    print(describe(item))
+            summary = f"{count} matching {'item' if count == 1 else 'items'}."
+            if count == 1:
+                question = "Show it?"
+            elif count <= PAGE_SIZE:
+                question = f"Show all {count} matching items?"
+            else:
+                question = f"Show the first {PAGE_SIZE}?"
+            if ask(f"{summary} {question}", [
+                ("y", "Show results"), ("n", "Finish with the count only"),
+            ]) == "y":
+                show_pages([describe(item) for item in items],
+                           kind="result", stop_label="Finish viewing results")
             return 0
         return apply_edits(args, items)
     except FileNotFoundError:
         raise SystemExit("The 1Password CLI (op) is missing from PATH.")
     except subprocess.CalledProcessError as error:
         raise SystemExit(f"1Password CLI failed (exit {error.returncode}).")
-    except EOFError:
-        raise SystemExit("No selection received. Canceled.")
+    except QuitDialog:
+        return 0
 
 
 if __name__ == "__main__":
