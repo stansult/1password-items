@@ -37,6 +37,12 @@ if args[:2] == ["item", "list"]:
         ["--format", "json"],
         ["--categories", "Login", "--vault", "Personal", "--format", "json"],
     )
+    diagnostic = os.environ.get("TEST_LIST_DIAGNOSTIC")
+    if diagnostic:
+        print(diagnostic, file=sys.stderr)
+    exit_status = int(os.environ.get("TEST_LIST_EXIT", "0"))
+    if exit_status:
+        sys.exit(exit_status)
     print(json.dumps([{k: v for k, v in row.items() if k != "fields"} for row in items]))
 elif args[:2] == ["item", "get"]:
     assert args[3:] == ["--vault", "vault-id", "--format", "json"]

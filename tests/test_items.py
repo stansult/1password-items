@@ -25,12 +25,23 @@ class ItemCommandTests(unittest.TestCase):
             TEST_REFRESH_TAG="",
             TEST_PAGE_COUNT="0",
             TEST_REJECT_THROUGH="0",
+            TEST_LIST_EXIT="0",
+            TEST_LIST_DIAGNOSTIC="",
         )
 
-    def run_items(self, *arguments, answer="", terminal=False, **env):
+    def run_items(self, *arguments, answer="", terminal=False, clock=None, **env):
         self.log.unlink(missing_ok=True)
         command = [sys.executable]
-        if terminal:
+        if clock is not None:
+            command.extend([
+                "-c",
+                "from datetime import datetime; import json, runpy, sys; "
+                "times = iter(map(datetime.fromisoformat, json.loads(sys.argv.pop(1)))); "
+                "main = runpy.run_path(sys.argv.pop(1))['main']; "
+                "sys.exit(main(now=lambda: next(times)))",
+                json.dumps(clock),
+            ])
+        elif terminal:
             command.extend([
                 "-c",
                 "import runpy, sys; sys.stdout.isatty = lambda: True; "
@@ -78,9 +89,10 @@ class ItemCommandTests(unittest.TestCase):
             with self.subTest(answer=answer):
                 result, edits = self.run_items("search", answer=answer)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertTrue(result.stdout.startswith(
-                    "7 matching items. Show all 7 matching items?\n\n"
-                ), result.stdout)
+                self.assertRegex(
+                    result.stdout,
+                    r"^\[\d{4}-\d{2}-\d{2}\]\n\[\d{2}:\d{2}:\d{2}\] 7 matching items\.",
+                )
                 self.assertEqual("'Google' [Personal]" in result.stdout, show)
                 self.assertEqual(edits, [])
 
@@ -96,9 +108,15 @@ class ItemCommandTests(unittest.TestCase):
         self.assertEqual(edits, [])
 
     def test_search_with_no_matches_does_not_prompt(self):
-        result, edits = self.run_items("search", "--title", "^No such item$")
+        result, edits = self.run_items(
+            "search", "--title", "^No such item$",
+            clock=["2026-11-12T09:05:04", "2026-11-12T09:05:05"],
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "No matching items.\n")
+        self.assertRegex(
+            result.stdout,
+            r"^\[\d{4}-\d{2}-\d{2}\]\n\[\d{2}:\d{2}:\d{2}\] No matching items\.\n$",
+        )
         self.assertEqual(edits, [])
 
     def test_workday_rename_continues_after_rejected_edit(self):
@@ -114,8 +132,10 @@ class ItemCommandTests(unittest.TestCase):
             ["--title", "Workday | Reject"],
             ["--title", "Workday | Zenith"],
         ])
-        self.assertIn("Applied 2 changes. Skipped due to errors: 1.", result.stdout)
-        self.assertIn("2. Skipped 'Myworkdayjobs - Reject' [Personal]", result.stdout)
+        self.assertRegex(
+            result.stdout, r"\n\[\d{2}:\d{2}:\d{2}\] Applied 2 changes\. Skipped due to errors: 1\."
+        )
+        self.assertIn("\n2. Skipped 'Myworkdayjobs - Reject' [Personal]", result.stdout)
         self.assertNotIn("Updated '", result.stdout)
         progress = [line for line in result.stdout.splitlines() if "Applying changes" in line]
         self.assertEqual(
@@ -130,7 +150,7 @@ class ItemCommandTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("'Gmail'", result.stdout)
-        self.assertIn("\n\nYou previewed 1 of 1 proposed changes.\n\n", result.stdout)
+        self.assertRegex(result.stdout, r"\n\n\[\d{2}:\d{2}:\d{2}\] You previewed 1 of 1 proposed changes\.\n\n")
         self.assertEqual(result.stdout.count("Applying changes…"), 1)
         self.assertIn("Applying changes… 0/1 items processed.", result.stdout)
         self.assertEqual(edits, [[
@@ -181,7 +201,7 @@ class ItemCommandTests(unittest.TestCase):
             with self.subTest(count=count, answer=answer):
                 result, edits = self.run_items("search", answer=answer, TEST_PAGE_COUNT=str(count))
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertTrue(result.stdout.startswith(f"{count} matching items. "))
+                self.assertRegex(result.stdout, rf"\n\[\d{{2}}:\d{{2}}:\d{{2}}\] {count} matching items\. ")
                 self.assertEqual(result.stdout.count("'Sample "), expected)
                 self.assertEqual(edits, [])
                 if count == 23 and expected == 23:
@@ -198,9 +218,9 @@ class ItemCommandTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("23 proposed changes.\n\n1. 'Sample 01'", result.stdout)
-                self.assertIn(
-                    "\n\nShow the next 10 of 13 remaining proposed changes?\n\n",
+                self.assertRegex(
                     result.stdout,
+                    r"\n\n\[\d{2}:\d{2}:\d{2}\] Show the next 10 of 13 remaining proposed changes\?\n\n",
                 )
                 self.assertIn("11. 'Sample 11'", result.stdout)
                 self.assertNotIn("21. 'Sample 21'", result.stdout)
@@ -208,7 +228,10 @@ class ItemCommandTests(unittest.TestCase):
                     f"page{number:02}" for number in range(1, 21)
                 ])
                 self.assertNotIn("Updated 'Sample ", result.stdout)
-                self.assertTrue(result.stdout.endswith("Applied 20 changes. Skipped due to errors: 0.\n"))
+                self.assertRegex(
+                    result.stdout,
+                    r"Applied 20 changes\. Skipped due to errors: 0\.\n(?:\[\d{4}-\d{2}-\d{2}\]\n)?$",
+                )
 
     def test_mixed_selection_previews_only_unseen_selected_rows(self):
         result, edits = self.run_items(
@@ -291,7 +314,9 @@ class ItemCommandTests(unittest.TestCase):
             answer="q\n", TEST_PAGE_COUNT="11",
         )
         self.assertEqual(result.returncode, 1)
-        self.assertTrue(result.stdout.startswith("No changes to apply.\nSkipped due to errors: 11."))
+        self.assertRegex(
+            result.stdout, r"No changes to apply\.\n\[\d{2}:\d{2}:\d{2}\] Skipped due to errors: 11\."
+        )
         self.assertEqual(result.stdout.count("Skipped 'Sample "), 10)
         self.assertIn("Show the next error?", result.stdout)
         self.assertEqual(edits, [])
@@ -317,13 +342,17 @@ class ItemCommandTests(unittest.TestCase):
                 self.assertEqual(result.returncode, int(name == "errors"), result.stderr)
                 self.assertIn(label, result.stdout)
                 if name == "item selection":
-                    self.assertIn("Selection: Selection: Enter all, shown, item numbers or ranges, or q.",
-                                  result.stdout)
+                    self.assertRegex(
+                        result.stdout,
+                        r"Selection: \nSelection: \n\[\d{2}:\d{2}:\d{2}\] Enter all, shown, item numbers or ranges, or q\.",
+                    )
                     self.assertIn("Use item numbers from 1 to 1", result.stdout)
                 else:
                     keys = "y, n, p, or q" if name == "confirm unseen" else "y, n, or q"
                     hint = f"Enter {keys}."
-                    self.assertIn(f"Choice: Choice: {hint}", result.stdout)
+                    self.assertRegex(
+                        result.stdout, rf"Choice: \nChoice: \n\[\d{{2}}:\d{{2}}:\d{{2}}\] {hint}"
+                    )
                     self.assertEqual(result.stdout.count(hint), 2)
                 self.assertEqual(len(edits), applied)
                 if applied:
@@ -335,3 +364,49 @@ class ItemCommandTests(unittest.TestCase):
                     self.assertNotIn("Updated '", result.stdout)
                 else:
                     self.assertNotIn("Applied ", result.stdout)
+
+    def test_primary_messages_have_local_timestamps_and_rows_do_not(self):
+        result, edits = self.run_items(
+            "search", answer="j\ny\n", clock=[
+                "2026-11-12T09:05:04", "2026-11-12T09:05:06", "2026-11-12T09:05:10",
+            ],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith(
+            "[2026-11-12]\n[09:05:04] 7 matching items. Show all 7 matching items?\n\n"
+        ))
+        self.assertIn("\n  y    Show results\n", result.stdout)
+        self.assertIn("\nChoice: \n[09:05:06] Enter y, n, or q.\nChoice: \n", result.stdout)
+        self.assertIn("\n'Google' [Personal] (LOGIN)\n", result.stdout)
+        self.assertEqual(result.stdout.count("[2026-11-12]"), 1)
+        self.assertEqual(edits, [])
+
+    def test_date_footer_on_quitting_after_midnight(self):
+        result, edits = self.run_items(
+            "search", answer="q\n", clock=["2026-11-12T23:59:58", "2026-11-13T00:00:01"],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith("[2026-11-12]\n[23:59:58]"))
+        self.assertTrue(result.stdout.endswith("Choice: \n[2026-11-13]\n"))
+        self.assertEqual(edits, [])
+
+    def test_failed_cli_diagnostic_follows_timestamped_error(self):
+        result, edits = self.run_items(
+            "search", clock=["2026-11-12T23:59:58", "2026-11-13T00:00:01"],
+            TEST_LIST_EXIT="8", TEST_LIST_DIAGNOSTIC="diagnostic line\ncontinued",
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr,
+                         "[2026-11-12]\n[23:59:58] 1Password CLI failed (exit 8).\n"
+                         "diagnostic line\ncontinued\n[2026-11-13]\n")
+        self.assertEqual(edits, [])
+
+    def test_help_and_argument_errors_have_no_timestamps(self):
+        for arguments, status in [(("--help",), 0), (("tag",), 2)]:
+            with self.subTest(arguments=arguments):
+                result, edits = self.run_items(*arguments, clock=[])
+                self.assertEqual(result.returncode, status)
+                self.assertIn("usage:", result.stdout + result.stderr)
+                self.assertNotRegex(result.stdout + result.stderr, r"\[(?:\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2})\]")
+                self.assertEqual(edits, [])

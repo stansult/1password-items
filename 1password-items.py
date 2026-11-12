@@ -7,9 +7,37 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 
 
 PAGE_SIZE = 10
+
+
+class RunOutput:
+    def __init__(self, now):
+        self.now = now
+        self.first_date = None
+        self.date_stream = None
+
+    def message(self, message, *, file=None):
+        stream = sys.stdout if file is None else file
+        current = self.now()
+        if self.first_date is None:
+            self.first_date = current.date()
+            self.date_stream = stream
+            print(f"[{self.first_date.isoformat()}]", file=stream, flush=True)
+        print(f"[{current:%H:%M:%S}] {message}", file=stream, flush=True)
+
+    def cli_message(self, message, details):
+        self.message(message, file=sys.stderr)
+        if details and details.strip():
+            print(details.rstrip(), file=sys.stderr, flush=True)
+
+    def finish(self):
+        if self.first_date is not None:
+            ending_date = self.now().date()
+            if ending_date != self.first_date:
+                print(f"[{ending_date.isoformat()}]", file=self.date_stream, flush=True)
 
 
 @dataclass
@@ -18,18 +46,20 @@ class Edit:
     preview: str
 
 
-def op_json(*arguments, capture_errors=False):
+def op_json(*arguments, output=None):
     result = subprocess.run(
         ["op", *arguments, "--format", "json"],
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE if capture_errors else None,
+        stderr=subprocess.PIPE,
         text=True,
         check=True,
     )
+    if output is not None and result.stderr.strip():
+        output.cli_message("1Password CLI diagnostic.", result.stderr)
     return json.loads(result.stdout)
 
 
-def search_items(args):
+def search_items(output, args):
     filters = []
     if args.category:
         filters.extend(["--categories", args.category])
@@ -37,7 +67,7 @@ def search_items(args):
         filters.extend(["--vault", args.vault])
 
     matches = [
-        item for item in op_json("item", "list", *filters)
+        item for item in op_json("item", "list", *filters, output=output)
         if (args.title is None or args.title.search(item["title"]))
         and (args.has_tag is None or args.has_tag in (item.get("tags") or []))
         and not item.get("archived", False)
@@ -50,9 +80,7 @@ def describe(item):
 
 
 def get_item(item):
-    return op_json(
-        "item", "get", item["id"], "--vault", item["vault"]["id"], capture_errors=True
-    )
+    return op_json("item", "get", item["id"], "--vault", item["vault"]["id"])
 
 
 def field_assignment(details, name, section):
@@ -123,11 +151,12 @@ class QuitDialog(Exception):
     """The user quit the command or closed its input."""
 
 
-def ask(question, options, *, pending_edit=False, parse=None):
+def ask(output, question, options, *, pending_edit=False, parse=None):
     quit_label = "Quit without applying changes" if pending_edit else "Quit"
     options = [*options, ("q", quit_label)]
     width = max(len(key) for key, _ in options)
-    print(f"{question}\n")
+    output.message(question)
+    print()
     for key, label in options:
         print(f"  {key:<{width}}    {label}")
     print()
@@ -138,6 +167,9 @@ def ask(question, options, *, pending_edit=False, parse=None):
             answer = input("Selection: " if parse else "Choice: ").strip().casefold()
         except EOFError:
             raise QuitDialog from None
+        finally:
+            if not sys.stdin.isatty() or not sys.stdout.isatty():
+                print()
         if answer == "q":
             raise QuitDialog
         if not answer:
@@ -146,15 +178,15 @@ def ask(question, options, *, pending_edit=False, parse=None):
             try:
                 return parse(answer)
             except ValueError as error:
-                print(error)
+                output.message(error)
         else:
             answer = {"yes": "y", "no": "n"}.get(answer, answer)
             if answer in keys:
                 return answer
-            print(f"Enter {', '.join(keys[:-1])}, or {keys[-1]}.")
+            output.message(f"Enter {', '.join(keys[:-1])}, or {keys[-1]}.")
 
 
-def show_pages(rows, *, kind, stop_label, pending_edit=False):
+def show_pages(output, rows, *, kind, stop_label, pending_edit=False):
     shown = 0
     while shown < len(rows):
         page = rows[shown:shown + PAGE_SIZE]
@@ -173,15 +205,15 @@ def show_pages(rows, *, kind, stop_label, pending_edit=False):
             question = f"Show the next {kind}?"
         else:
             question = f"Show the next {remaining} {kind}s?"
-        if ask(question, [("y", "Show the next page"), ("n", stop_label)],
+        if ask(output, question, [("y", "Show the next page"), ("n", stop_label)],
                pending_edit=pending_edit) == "n":
             break
     return shown
 
 
-def show_errors(errors):
+def show_errors(output, errors):
     try:
-        show_pages(errors, kind="error", stop_label="Finish viewing errors")
+        show_pages(output, errors, kind="error", stop_label="Finish viewing errors")
     except QuitDialog:
         pass
 
@@ -216,7 +248,7 @@ def parse_selection(answer, count, shown):
     return sorted(selected)
 
 
-def confirm_selection(rows, selected, shown):
+def confirm_selection(output, rows, selected, shown):
     while True:
         unseen = [index for index in selected if index not in shown]
         count = len(selected)
@@ -231,24 +263,24 @@ def confirm_selection(rows, selected, shown):
             question = f"{question} {unseen_message}"
             options.append(("p", f"Preview the {remaining} unseen {'item' if remaining == 1 else 'items'}"))
 
-        answer = ask(question, options, pending_edit=True)
+        answer = ask(output, question, options, pending_edit=True)
         if answer != "p":
             return answer == "y"
         displayed = show_pages(
-            [rows[index] for index in unseen], kind="unseen selected item",
+            output, [rows[index] for index in unseen], kind="unseen selected item",
             stop_label="Return to confirmation", pending_edit=True,
         )
         shown.update(unseen[:displayed])
 
 
-def select_items(rows):
+def select_items(output, rows):
     count = len(rows)
     shown = set(range(show_pages(
-        rows, kind="proposed change", stop_label="Continue to item selection", pending_edit=True,
+        output, rows, kind="proposed change", stop_label="Continue to item selection", pending_edit=True,
     )))
     while True:
         selected = ask(
-            f"You previewed {len(shown)} of {count} proposed changes.",
+            output, f"You previewed {len(shown)} of {count} proposed changes.",
             [
                 ("all", f"Select all {count} items" if count > 1 else "Select the only item"),
                 ("shown", f"Select the {len(shown)} previewed items" if len(shown) > 1
@@ -258,7 +290,7 @@ def select_items(rows):
             pending_edit=True,
             parse=lambda answer: parse_selection(answer, count, shown),
         )
-        if confirm_selection(rows, selected, shown):
+        if confirm_selection(output, rows, selected, shown):
             return selected
 
 
@@ -268,7 +300,7 @@ def report_edit_progress(processed, total, *, inline):
     print(f"{prefix}Applying changes… {processed}/{total} items processed.", end=end, flush=True)
 
 
-def apply_edits(args, items):
+def apply_edits(output, args, items):
     planned = []
     errors = []
     for item in items:
@@ -281,20 +313,20 @@ def apply_edits(args, items):
             planned.append((item, edit))
 
     if not planned:
-        print("No changes to apply.")
+        output.message("No changes to apply.")
         if errors:
-            print(f"Skipped due to errors: {len(errors)}.")
-            show_errors(errors)
+            output.message(f"Skipped due to errors: {len(errors)}.")
+            show_errors(output, errors)
         return int(bool(errors))
 
-    print(f"{len(planned)} proposed changes.")
+    output.message(f"{len(planned)} proposed changes.")
     try:
-        selected = select_items([
+        selected = select_items(output, [
             f"{number}. {describe(item)} — {edit.preview}"
             for number, (item, edit) in enumerate(planned, start=1)
         ])
     except QuitDialog:
-        print("Canceled.")
+        output.message("Canceled.")
         return 0
 
     applied = 0
@@ -331,10 +363,10 @@ def apply_edits(args, items):
     if inline:
         report_edit_progress(total, total, inline=True)
     changes = "change" if applied == 1 else "changes"
-    print(f"Applied {applied} {changes}. Skipped due to errors: {len(errors)}.")
+    output.message(f"Applied {applied} {changes}. Skipped due to errors: {len(errors)}.")
     if up_to_date:
-        print(f"Already up to date: {up_to_date}.")
-    show_errors(errors)
+        output.message(f"Already up to date: {up_to_date}.")
+    show_errors(output, errors)
     return int(bool(errors))
 
 
@@ -383,12 +415,13 @@ def parse_arguments():
     return args
 
 
-def main():
+def main(*, now=datetime.now):
     args = parse_arguments()
+    output = RunOutput(now)
     try:
-        items = search_items(args)
+        items = search_items(output, args)
         if not items:
-            print("No matching items.")
+            output.message("No matching items.")
             return 0
         if args.command == "search":
             count = len(items)
@@ -399,19 +432,23 @@ def main():
                 question = f"Show all {count} matching items?"
             else:
                 question = f"Show the first {PAGE_SIZE}?"
-            if ask(f"{summary} {question}", [
+            if ask(output, f"{summary} {question}", [
                 ("y", "Show results"), ("n", "Finish with the count only"),
             ]) == "y":
-                show_pages([describe(item) for item in items],
+                show_pages(output, [describe(item) for item in items],
                            kind="result", stop_label="Finish viewing results")
             return 0
-        return apply_edits(args, items)
+        return apply_edits(output, args, items)
     except FileNotFoundError:
-        raise SystemExit("The 1Password CLI (op) is missing from PATH.")
+        output.message("The 1Password CLI (op) is missing from PATH.", file=sys.stderr)
+        return 1
     except subprocess.CalledProcessError as error:
-        raise SystemExit(f"1Password CLI failed (exit {error.returncode}).")
+        output.cli_message(f"1Password CLI failed (exit {error.returncode}).", error.stderr)
+        return 1
     except QuitDialog:
         return 0
+    finally:
+        output.finish()
 
 
 if __name__ == "__main__":

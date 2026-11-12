@@ -67,6 +67,12 @@ After confirmation, the script shows how many items it has processed. The counte
 
 If the CLI reports an unsupported field such as `ssoLogin`, edit that item in the 1Password app. Items with existing tags containing commas also need to be tagged in the app.
 
+## Timestamps
+
+Operational output starts with the local date in `[YYYY-MM-DD]`. Primary messages such as counts, questions, input hints, and summaries start with local `[HH:MM:SS]`. Menu choices, input prompts, item rows, error details, and the live progress counter stay undecorated. Help and argument usage errors are also undecorated.
+
+An ending date appears only when the local date at exit differs from the date of the first operational message.
+
 ## Verification
 
 Search, selection, title and named-field changes, tag preservation, and continuation after a rejected edit were checked with simulated CLI responses. The unified script's edit commands have yet to be verified against a live test vault.
